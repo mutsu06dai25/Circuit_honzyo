@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Lap Logger</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Lap Logger <small id="trackName">本庄サーキット</small></div>
+  <div id="recBadge" class="rec-badge" hidden>● REC</div>
+</header>
+
+<main>
+  <!-- 計測 -->
+  <section id="view-log" class="view active">
+    <div class="live-grid">
+      <div class="live-speed"><span id="liveSpeed">0</span><small>km/h</small></div>
+      <div class="live-lap">
+        <div class="lbl">現在ラップ</div>
+        <div id="liveLap" class="big mono">--:--.---</div>
+        <div class="row2">
+          <div><div class="lbl">前周</div><div id="liveLast" class="mono">--:--.---</div></div>
+          <div><div class="lbl">ベスト</div><div id="liveBest" class="mono">--:--.---</div></div>
+          <div><div class="lbl">差</div><div id="liveDelta" class="mono">&nbsp;</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="status-grid">
+      <div><div class="lbl">GPS 精度</div><div id="stAcc">-</div></div>
+      <div><div class="lbl">更新レート</div><div id="stRate">-</div></div>
+      <div><div class="lbl">経過</div><div id="stElapsed" class="mono">0:00</div></div>
+      <div><div class="lbl">点数</div><div id="stCount">0</div></div>
+      <div><div class="lbl">Gセンサー</div><div id="stMotion">-</div></div>
+      <div><div class="lbl">画面ロック防止</div><div id="stWake">-</div></div>
+    </div>
+    <p id="lapHint" class="hint"></p>
+    <button id="btnRec" class="btn-rec">記録開始</button>
+    <div class="opts">
+      <label><input type="checkbox" id="optMotion" checked> Gセンサーも記録する</label>
+    </div>
+    <details class="tips">
+      <summary>走行前のチェック</summary>
+      <ul>
+        <li>スマホはホルダーでしっかり固定（走行中に向きが変わらないこと）。Gセンサーの向きは走行データから自動で推定します。</li>
+        <li>記録中は<b>このアプリを前面・画面点灯のまま</b>にしてください。画面を消したり他のアプリに切り替えると、多くの端末でGPS記録が止まります。</li>
+        <li>空が見える位置に置き、走行前にピットで1〜2分GPSを掴ませると精度が安定します（精度 5m 以下が目安）。</li>
+        <li>スマホGPSは毎秒1回程度の更新です。より細かく見たい場合は10Hz以上の外部GPSロガーのデータ（CSV / GPX / NMEA）を「セッション」から読み込めます。</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- セッション -->
+  <section id="view-sessions" class="view">
+    <div class="toolbar">
+      <label class="btn">ファイル読込<input type="file" id="fileImport" accept=".csv,.gpx,.nmea,.nma,.txt,.json,.vbo" multiple hidden></label>
+      <button id="btnDemo" class="btn">デモデータ</button>
+    </div>
+    <p class="hint">読込対応: 本アプリの CSV / JSON、GPX、NMEA、緯度・経度・時刻列を含む一般的な CSV（RaceChrono 等の書き出し）。</p>
+    <div id="sessionList" class="cards"></div>
+  </section>
+
+  <!-- 分析 -->
+  <section id="view-analysis" class="view">
+    <div class="toolbar">
+      <select id="selSession"></select>
+    </div>
+    <div id="anaEmpty" class="empty">セッションを選択してください。</div>
+    <div id="anaBody" hidden>
+      <div id="anaInfo" class="info-row"></div>
+
+      <h3>ラップ一覧</h3>
+      <div class="table-wrap"><table id="lapTable" class="tbl"></table></div>
+      <p class="hint">基準ラップ（<span class="sw ref"></span>）と比較ラップ（<span class="sw cmp"></span>）を選ぶと、下の地図・グラフで重ねて比較します。</p>
+
+      <div id="coach" class="coach"></div>
+
+      <h3>走行ライン</h3>
+      <div class="toolbar wrap">
+        <select id="mapColor">
+          <option value="speed">色: 速度</option>
+          <option value="long">色: 加減速 (前後G)</option>
+          <option value="lat">色: 横G</option>
+          <option value="plain">色: ラップ別</option>
+        </select>
+        <select id="mapLayer">
+          <option value="sat">航空写真</option>
+          <option value="osm">地図</option>
+          <option value="none">背景なし</option>
+        </select>
+        <button id="btnSetSF" class="btn sm">S/Fライン設定</button>
+        <button id="btnAddSector" class="btn sm">セクター追加</button>
+        <button id="btnClearSector" class="btn sm">セクター消去</button>
+      </div>
+      <p id="mapHint" class="hint"></p>
+      <div id="map"></div>
+      <div id="mapLegend" class="legend"></div>
+
+      <h3>グラフ <small>（横軸: 距離 m ／ 指でなぞるとカーソル、2本指でズーム）</small></h3>
+      <div class="toolbar">
+        <button id="zIn" class="btn sm">＋</button>
+        <button id="zOut" class="btn sm">－</button>
+        <button id="zAll" class="btn sm">全体</button>
+        <label class="inline"><input type="checkbox" id="optSensorG"> 前後・横GにGセンサー値を使う</label>
+      </div>
+      <div class="charts">
+        <canvas id="cSpeed"></canvas>
+        <canvas id="cDelta"></canvas>
+        <canvas id="cLong"></canvas>
+        <canvas id="cLat"></canvas>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <h3>G-G ダイアグラム（摩擦円）</h3>
+          <canvas id="cGG" class="gg"></canvas>
+        </div>
+        <div>
+          <h3>ブレーキング</h3>
+          <div class="table-wrap"><table id="brakeTable" class="tbl"></table></div>
+          <h3>コーナー（最低速度）</h3>
+          <div class="table-wrap"><table id="cornerTable" class="tbl"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 設定 -->
+  <section id="view-settings" class="view">
+    <h3>コース設定</h3>
+    <div id="trackList"></div>
+    <h3>データ</h3>
+    <div class="toolbar wrap">
+      <button id="btnBackup" class="btn">全データをバックアップ (JSON)</button>
+      <label class="btn">バックアップから復元<input type="file" id="fileRestore" accept=".json" hidden></label>
+    </div>
+    <p id="storageInfo" class="hint"></p>
+    <h3>このアプリについて</h3>
+    <p class="hint">GPS（位置・ドップラー速度・方位）とスマホの加速度センサーから、周回タイム、速度、前後G（ブレーキ／加速）、横G、走行ラインを解析します。データはすべてこの端末内（ブラウザ）に保存され、外部には送信されません。地図の背景画像のみインターネットから取得します。</p>
+    <p class="hint">横Gは右旋回を＋、前後Gは加速を＋として表示します。スマホGPS（約1Hz）由来の前後Gはピーク値が実際より小さめに出ます。Gセンサーの向き推定が成功した場合はその値も使えます。</p>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button data-view="log" class="active"><span>⏱</span>計測</button>
+  <button data-view="sessions"><span>☰</span>セッション</button>
+  <button data-view="analysis"><span>📈</span>分析</button>
+  <button data-view="settings"><span>⚙</span>設定</button>
+</nav>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
